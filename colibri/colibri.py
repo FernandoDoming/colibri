@@ -4,6 +4,7 @@ import time
 import random
 import signal
 import logging
+import shutil
 
 from ctypes import c_bool
 from multiprocessing import Manager, Value
@@ -12,16 +13,15 @@ import qiling as qlapi
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
 from qiling.os.posix.const import NR_OPEN
 
-from colibri.syscalls.network import syscall_recv, syscall_send, syscall_connect
-from colibri.syscalls.filesystem import write_onenter
-from colibri.syscalls.time import (
-    syscall_clock_nanosleep_time64, syscall_nanosleep,
-    syscall_clock_nanosleep
-)
+from colibri.syscalls.network import *
+from colibri.syscalls.filesystem import *
+from colibri.syscalls.time import *
+from colibri.syscalls.unistd import *
+
 from colibri.utils.cmdline import (
     blue, red, yellow, green, magenta, cyan,
 )
-from colibri.syscalls.unistd import syscall_fork, syscall_vfork
+
 from colibri.core.classes import dotdict, Singleton
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
@@ -48,6 +48,10 @@ class Hummingbird(metaclass=Singleton):
     }
     on_enter_hooks = {
         "write": write_onenter,
+        "open": open_onenter,
+    }
+    on_exit_hooks = {
+        "open": open_onexit,
     }
 
     # ---------------------------------------
@@ -63,14 +67,15 @@ class Hummingbird(metaclass=Singleton):
         self.options = dotdict(**kwargs)
 
     # ---------------------------------------
-    def run(self, fpath, rootfs, timeout = 10):
+    def run(self, fpath, timeout = 10):
         self.ql = qlapi.Qiling(
             [fpath],
-            rootfs,
+            self.options.rootfs,
             verbose=QL_VERBOSE.DEBUG if self.options.get("debug", False) else QL_VERBOSE.OFF
         )
         self.ql.hb = self
         self.set_hooks()
+        self.reset_filesystem()
 
         # Doing this instead of Qiling's timeout because
         # Qiling's timeout does not stop forked children
@@ -92,6 +97,9 @@ class Hummingbird(metaclass=Singleton):
 
         for syscall_name, syscall_fn in self.on_enter_hooks.items():
             self.ql.os.set_syscall(syscall_name, syscall_fn, QL_INTERCEPT.ENTER)
+
+        for syscall_name, syscall_fn in self.on_exit_hooks.items():
+            self.ql.os.set_syscall(syscall_name, syscall_fn, QL_INTERCEPT.EXIT)
 
     # ---------------------------------------
     def stop(self, signum, frame):
@@ -115,16 +123,26 @@ class Hummingbird(metaclass=Singleton):
             except Exception:
                 pass
 
+    # ---------------------------------------
+    def reset_filesystem(self):
+        dirname    = os.path.dirname(__file__)
+        rootfs_dir = os.path.join(dirname, "rootfs")
+        log.info("Resetting filesystem to %s", rootfs_dir)
+        if os.path.exists(self.options.rootfs):
+            shutil.rmtree(self.options.rootfs)
+        shutil.copytree(rootfs_dir, self.options.rootfs)
+
 # -----------------------------------------------------------------
 def main():
     import argparse
     print_banner()
 
     parser = argparse.ArgumentParser()
+    default_rootfs = os.path.join(os.path.expanduser("~"), ".colibri", "rootfs")
     parser.add_argument(
         "-fs", "--rootfs",
-        help = "Root directory to use as filesystem (default: os.getcwd())",
-        default = os.getcwd()
+        help = "Root directory to use as filesystem (default: %s)" % default_rootfs,
+        default = default_rootfs
     )
     parser.add_argument(
         "-o", "--output",
@@ -158,7 +176,8 @@ def main():
         debug   = args.v,
         network = args.network,
         skip_sleep = not args.no_skip_sleep,
-        output_file = args.output
+        output_file = args.output,
+        rootfs  = args.rootfs,
     )
     print(cyan("[*] Running ") + yellow(args.file) + cyan(" with options:"))
     print("\t" + cyan("Rootfs: ") + args.rootfs)
@@ -168,7 +187,6 @@ def main():
     print()
     sb.run(
         fpath   = args.file,
-        rootfs  = args.rootfs,
         timeout = args.timeout,
     )
 
