@@ -1,10 +1,14 @@
 import sys
 import struct
+import random
+import ipaddress
 
+from qiling import Qiling
+from qiling.os.posix.filestruct import ql_socket
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
-from qiling.os.posix.const import NR_OPEN
+from qiling.os.posix.const import NR_OPEN, EPERM
 
-from colibri.utils.network_utils import ql_bin_to_ip
+from colibri.utils.network_utils import ql_bin_to_ip, random_ipv4
 
 # -----------------------------------------------------------------
 def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
@@ -45,7 +49,7 @@ def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
                     "fd": connect_sockfd,
                     "ip": ip,
                     "port": port,
-                    "resutl": result,
+                    "result": result,
                 })
                 ql.hb.report["network"] = network
                 # Even if connect fails, return 0 so execution continues
@@ -116,3 +120,32 @@ def syscall_recv(ql, sockfd: int, buf: int, length: int, flags: int):
 
     ql.mem.write(buf, content)
     return len(content)
+
+# -----------------------------------------------------------------
+def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
+    if 0 <= sockfd < NR_OPEN:
+        socket = ql.os.fd[sockfd]
+
+        if isinstance(socket, ql_socket):
+            host, port = None, None
+            if ql.hb.options.get("network", False):
+                host, port = socket.getpeername()
+            else:
+                host = random_ipv4()
+                port = random.randint(0, 65535)
+
+            data = struct.pack("<h", int(socket.family))
+            data += struct.pack(">H", port)
+            data += ipaddress.ip_address(host).packed
+
+            addrlen = ql.mem.read_ptr(addrlenptr)
+
+            ql.mem.write(addr, data[:addrlen])
+            regreturn = 0
+        else:
+            regreturn = -EPERM
+    else:
+        regreturn = -EPERM
+
+    ql.log.debug("getsockname(%d, 0x%x, 0x%x) = %d" % (sockfd, addr, addrlenptr, regreturn))
+    return 

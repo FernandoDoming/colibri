@@ -29,8 +29,10 @@ def __sleep_common(ql: Qiling, req: int, rem: int, force_timespec64: bool = Fals
 
     tv_sec += ql.unpack(ql.mem.read(req + tv_sec_size, tv_nsec_size)) / 1000000000
     pid = os.getpid()
-    ql.hb.report["syscalls"].setdefault(pid, [])
-    ql.hb.report["syscalls"][pid].append({
+    syscalls = ql.hb.report["syscalls"]
+    if not pid in syscalls:
+        syscalls[pid] = []
+    syscalls[pid].append({
         "name": "sleep",
         "args": {
             "tv_sec": tv_sec,

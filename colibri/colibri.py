@@ -40,6 +40,7 @@ class Hummingbird(metaclass=Singleton):
         "connect": syscall_connect,
         "send": syscall_send,
         "recv": syscall_recv,
+        "getsockname": syscall_getsockname,
         "fork": syscall_fork,
         "vfork": syscall_vfork,
         "nanosleep": syscall_nanosleep,
