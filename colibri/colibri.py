@@ -41,9 +41,10 @@ class Colibri(metaclass=Singleton):
         "nanosleep": syscall_nanosleep,
         "clock_nanosleep": syscall_clock_nanosleep,
         "clock_nanosleep_time64": syscall_clock_nanosleep_time64,
+        "setsockopt": syscall_setsockopt,
+        "write": syscall_write,
     }
     on_enter_hooks = {
-        "write": write_onenter,
         "open": open_onenter,
     }
     on_exit_hooks = {

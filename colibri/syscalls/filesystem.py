@@ -1,15 +1,44 @@
 import os
 import sys
+import traceback
 
 from qiling import Qiling
 from colibri.core.const import CATEGORY_FILESYSTEM
 
-# -----------------------------------------------------------------
-def write_onenter(ql: Qiling, fd, buf, count):
-    try:
-        data = ql.mem.read(buf, count)
-        filename = ql.os.fd[fd].name
+from qiling.os.posix.const import *
+from qiling.os.posix.filestruct import ql_socket
 
+# -----------------------------------------------------------------
+def syscall_write(ql: Qiling, fd, buf, count):
+    regreturn = -1
+    try:
+        if fd not in range(NR_OPEN):
+            return -EBADF
+
+        f = ql.os.fd[fd]
+
+        if f is None:
+            return -EBADF
+
+        try:
+            data = ql.mem.read(buf, count)
+        except:
+            regreturn = -1
+        ql.log.debug(f'write() CONTENT: {bytes(data)}')
+
+        if hasattr(f, 'write'):
+            if not isinstance(f, ql_socket) or ql.hb.options.get("network", False):
+                f.write(data)
+            regreturn = count
+        else:
+            ql.log.warning(f'write failed since fd {fd:d} does not have a write method')
+            regreturn = -1
+
+        filename = fd
+        if hasattr(f, "name"):
+            filename = f.name
+        if isinstance(f, ql_socket):
+            filename = f"socket({f.ip}:{f.port})"
         fs = ql.hb.report[CATEGORY_FILESYSTEM]
         pid = os.getpid()
         if not pid in fs:
@@ -21,7 +50,9 @@ def write_onenter(ql: Qiling, fd, buf, count):
         fs[pid]["write"][filename] += data.decode("utf-8")
         ql.hb.report[CATEGORY_FILESYSTEM] = fs
     except Exception:
-        ql.log.info(sys.exc_info()[0])
+        ql.log.info(traceback.format_exc())
+
+    return regreturn
 
 # -----------------------------------------------------------------
 def open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
@@ -37,7 +68,7 @@ def open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
             }
         )
     except Exception:
-        ql.log.info(sys.exc_info()[0])
+        ql.log.info(traceback.format_exc())
 
 def open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval: int):
     try:
@@ -52,4 +83,4 @@ def open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval: int):
             retval = retval
         )
     except Exception:
-        ql.log.info(sys.exc_info()[0])
+        ql.log.info(traceback.format_exc())

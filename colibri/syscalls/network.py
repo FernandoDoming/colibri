@@ -4,10 +4,17 @@ import struct
 import random
 import ipaddress
 
+from unicorn.unicorn import UcError
+
 from qiling import Qiling
 from qiling.os.posix.filestruct import ql_socket
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
-from qiling.os.posix.const import NR_OPEN, EPERM
+from qiling.os.posix.const_mapping import (
+    socket_type_mapping, socket_level_mapping, socket_domain_mapping,
+    socket_ip_option_mapping, socket_option_mapping
+)
+from qiling.os.posix.const import *
+from qiling.os.posix.filestruct import ql_socket
 
 from colibri.utils.network_utils import ql_bin_to_ip, random_ipv4
 from colibri.core.const import CATEGORY_NETWORK
@@ -36,7 +43,8 @@ def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
             elif s.family == AF_INET:
                 port, host = struct.unpack(">HI", sock_addr[2:8])
                 ip = ql_bin_to_ip(host)
-
+                s.ip = ip
+                s.port = port
                 if ql.hb.options.get("network", False):
                     try:
                         s.connect((ip, port))
@@ -68,7 +76,8 @@ def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
 # -----------------------------------------------------------------
 def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
     regreturn = 0
-    if 0 <= send_sockfd < 1024 and ql.os.fd[send_sockfd] != 0:
+    s = ql.os.fd[send_sockfd]
+    if 0 <= send_sockfd < 1024 and s != 0:
         try:
             tmp_buf = ql.mem.read(send_buf, send_len)
             ql.log.debug("send() CONTENT:")
@@ -78,7 +87,7 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
 
             if ql.hb.options.get("network", False):
                 try:
-                    regreturn = ql.os.fd[send_sockfd].send(
+                    regreturn = s.send(
                         bytes(tmp_buf), send_flags
                     )
                 except Exception:
@@ -89,6 +98,8 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
                 subcategory = "sent_data",
                 data = {
                     "fd": send_sockfd,
+                    "ip": s.ip,
+                    "port": s.port,
                     "data": tmp_buf.decode("utf-8"),
                 }
             )
@@ -173,4 +184,12 @@ def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
         }
     )
     ql.log.debug("getsockname(%d, 0x%x, 0x%x) = %d" % (sockfd, addr, addrlenptr, regreturn))
-    return 
+    return
+
+# -----------------------------------------------------------------
+def syscall_setsockopt(ql: Qiling, sockfd, level, optname, optval_addr, optlen):
+    if sockfd not in range(NR_OPEN) or ql.os.fd[sockfd] is None:
+        return -EBADF
+
+    regreturn = 0
+    return regreturn
