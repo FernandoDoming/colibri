@@ -1,0 +1,2 @@
+CATEGORY_NETWORK = "network"
+CATEGORY_FILESYSTEM = "filesystem"

@@ -30,12 +30,7 @@ log = logging.getLogger("colibri.main")
 log.setLevel(logging.INFO)
 
 # -----------------------------------------------------------------
-class Hummingbird(metaclass=Singleton):
-    running = None
-    smm     = None
-    pids    = None
-    report  = None
-
+class Colibri(metaclass=Singleton):
     replaced_syscall = {
         "connect": syscall_connect,
         "send": syscall_send,
@@ -53,6 +48,7 @@ class Hummingbird(metaclass=Singleton):
     }
     on_exit_hooks = {
         "open": open_onexit,
+        "execve": syscall_execve_onexit,
     }
 
     # ---------------------------------------
@@ -133,6 +129,34 @@ class Hummingbird(metaclass=Singleton):
             shutil.rmtree(self.options.rootfs)
         shutil.copytree(rootfs_dir, self.options.rootfs)
 
+    # ---------------------------------------
+    def log_syscall(self, name, args, retval, extra = {}):
+        # Shared dicts are a bit special and are not updated
+        # if not done like this
+        # https://stackoverflow.com/a/48646169
+        syscalls = self.report["syscalls"]
+        caller_pid = os.getpid()
+        if caller_pid not in syscalls:
+            syscalls[caller_pid] = []
+        syscalls[caller_pid].append({
+            "name": name,
+            "args": args,
+            "return": retval,
+            "extra": extra,
+        })
+        self.report["syscalls"] = syscalls
+
+    # ---------------------------------------
+    def add_report_info(self, category: str, subcategory: str, data: dict):
+        catinfo = self.report[category]
+        pid = os.getpid()
+        if pid not in catinfo:
+            catinfo[pid] = {}
+        if subcategory not in catinfo[pid]:
+            catinfo[pid][subcategory] = []
+        catinfo[pid][subcategory].append(data)
+        self.report[category] = catinfo
+
 # -----------------------------------------------------------------
 def main():
     import argparse
@@ -173,7 +197,7 @@ def main():
     )
     parser.add_argument("file")
     args = parser.parse_args()
-    sb = Hummingbird(
+    sb = Colibri(
         debug   = args.v,
         network = args.network,
         skip_sleep = not args.no_skip_sleep,

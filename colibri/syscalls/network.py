@@ -1,3 +1,4 @@
+import os
 import sys
 import struct
 import random
@@ -9,6 +10,7 @@ from qiling.const import QL_INTERCEPT, QL_VERBOSE
 from qiling.os.posix.const import NR_OPEN, EPERM
 
 from colibri.utils.network_utils import ql_bin_to_ip, random_ipv4
+from colibri.core.const import CATEGORY_NETWORK
 
 # -----------------------------------------------------------------
 def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
@@ -42,16 +44,16 @@ def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
                     except Exception:
                         result = "fail"
 
-                network = ql.hb.report["network"]
-                if "sockets" not in network:
-                    network["sockets"] = []
-                network["sockets"].append({
-                    "fd": connect_sockfd,
-                    "ip": ip,
-                    "port": port,
-                    "result": result,
-                })
-                ql.hb.report["network"] = network
+                ql.hb.add_report_info(
+                    category = CATEGORY_NETWORK,
+                    subcategory = "sockets",
+                    data = {
+                        "fd": connect_sockfd,
+                        "ip": ip,
+                        "port": port,
+                        "resolution": result,
+                    }
+                )
                 # Even if connect fails, return 0 so execution continues
                 regreturn = 0
             else:
@@ -82,14 +84,14 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
                 except Exception:
                     pass
 
-            network = ql.hb.report["network"]
-            if "sent_data" not in network:
-                network["sent_data"] = []
-            network["sent_data"].append({
-                "fd": send_sockfd,
-                "data": tmp_buf.decode("utf-8"),
-            })
-            ql.hb.report["network"] = network
+            ql.hb.add_report_info(
+                category = CATEGORY_NETWORK,
+                subcategory = "sent_data",
+                data = {
+                    "fd": send_sockfd,
+                    "data": tmp_buf.decode("utf-8"),
+                }
+            )
         except Exception:
             ql.log.info(sys.exc_info()[0])
             if ql.verbose >= QL_VERBOSE.DEBUG:
@@ -119,6 +121,15 @@ def syscall_recv(ql, sockfd: int, buf: int, length: int, flags: int):
         ql.log.debug("%s" % content)
 
     ql.mem.write(buf, content)
+
+    ql.hb.log_syscall(
+        name = "recv",
+        args = {},
+        retval = len(content),
+        extra = {
+            "content": content.decode("utf-8"),
+        }
+    )
     return len(content)
 
 # -----------------------------------------------------------------
@@ -127,12 +138,14 @@ def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
         socket = ql.os.fd[sockfd]
 
         if isinstance(socket, ql_socket):
-            host, port = None, None
+            host, port, resolution = None, None, None
             if ql.hb.options.get("network", False):
                 host, port = socket.getpeername()
+                resolution = "success"
             else:
                 host = random_ipv4()
                 port = random.randint(0, 65535)
+                resolution = "mocked"
 
             data = struct.pack("<h", int(socket.family))
             data += struct.pack(">H", port)
@@ -147,5 +160,17 @@ def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
     else:
         regreturn = -EPERM
 
+    ql.hb.log_syscall(
+        name = "getsockname",
+        args = {
+            "sockfd": sockfd,
+        },
+        retval = regreturn,
+        extra = {
+            "host": host,
+            "port": port,
+            "resolution": resolution,
+        }
+    )
     ql.log.debug("getsockname(%d, 0x%x, 0x%x) = %d" % (sockfd, addr, addrlenptr, regreturn))
     return 

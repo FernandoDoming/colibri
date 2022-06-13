@@ -35,17 +35,11 @@ def syscall_vfork(ql: Qiling):
 
         if regreturn:
             caller_pid = os.getpid()
-            # Shared dicts are a bit special and are not updated
-            # if not done like this
-            # https://stackoverflow.com/a/48646169
-            syscalls = ql.hb.report["syscalls"]
-            if caller_pid not in syscalls:
-                syscalls[caller_pid] = []
-            syscalls[caller_pid].append({
-                "name": "vfork",
-                "return": regreturn,
-            })
-            ql.hb.report["syscalls"] = syscalls
+            ql.hb.log_syscall(
+                name = "vfork",
+                args = {},
+                retval = regreturn
+            )
 
     except Exception:
         # After stopping execution and killing children
@@ -62,3 +56,8 @@ def syscall_vfork(ql: Qiling):
 # -----------------------------------------------------------------
 def syscall_fork(ql: Qiling):
     return syscall_vfork(ql)
+
+# -----------------------------------------------------------------
+def syscall_execve_onexit(ql: Qiling, pathname: int, argv: int, envp: int, retval: int):
+    file_path = ql.os.utils.read_cstring(pathname)
+    real_path = ql.os.path.transform_to_real_path(file_path)
