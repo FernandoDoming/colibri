@@ -43,6 +43,7 @@ class Colibri(metaclass=Singleton):
         "clock_nanosleep_time64": syscall_clock_nanosleep_time64,
         "setsockopt": syscall_setsockopt,
         "write": syscall_write,
+        "_newselect": syscall__newselect,
     }
     on_enter_hooks = {
         "open": open_onenter,
@@ -81,6 +82,7 @@ class Colibri(metaclass=Singleton):
         signal.alarm(timeout)
         try:
             self.running = Value(c_bool, True)
+            self.analysis_start_time = time.time()
             self.ql.run()
         except Exception:
             log.exception("Failed to run Qiling on sample %s", fpath)
@@ -132,31 +134,46 @@ class Colibri(metaclass=Singleton):
 
     # ---------------------------------------
     def log_syscall(self, name, args, retval, extra = {}):
-        # Shared dicts are a bit special and are not updated
-        # if not done like this
-        # https://stackoverflow.com/a/48646169
-        syscalls = self.report["syscalls"]
-        caller_pid = os.getpid()
-        if caller_pid not in syscalls:
-            syscalls[caller_pid] = []
-        syscalls[caller_pid].append({
-            "name": name,
-            "args": args,
-            "return": retval,
-            "extra": extra,
-        })
-        self.report["syscalls"] = syscalls
+        try:
+            toff = time.time() - self.analysis_start_time
+            # Shared dicts are a bit special and are not updated
+            # if not done like this
+            # https://stackoverflow.com/a/48646169
+            syscalls = self.report["syscalls"]
+            caller_pid = os.getpid()
+            if caller_pid not in syscalls:
+                syscalls[caller_pid] = []
+            syscalls[caller_pid].append({
+                "name": name,
+                "time": toff,
+                "args": args,
+                "return": retval,
+                "extra": extra,
+            })
+            self.report["syscalls"] = syscalls
+        except Exception:
+            log.debug(
+                "Failed to log syscall %s",
+                name
+            )
 
     # ---------------------------------------
     def add_report_info(self, category: str, subcategory: str, data: dict):
-        catinfo = self.report[category]
-        pid = os.getpid()
-        if pid not in catinfo:
-            catinfo[pid] = {}
-        if subcategory not in catinfo[pid]:
-            catinfo[pid][subcategory] = []
-        catinfo[pid][subcategory].append(data)
-        self.report[category] = catinfo
+        try:
+            catinfo = self.report[category]
+            pid = os.getpid()
+            if pid not in catinfo:
+                catinfo[pid] = {}
+            if subcategory not in catinfo[pid]:
+                catinfo[pid][subcategory] = []
+            if data not in catinfo[pid][subcategory]:
+                catinfo[pid][subcategory].append(data)
+            self.report[category] = catinfo
+        except Exception:
+            log.debug(
+                "Failed to add report info. Data: %s. Cat: %s, Subcat: %s",
+                data, category, subcategory
+            )
 
 # -----------------------------------------------------------------
 def main():

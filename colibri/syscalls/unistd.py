@@ -61,3 +61,7 @@ def syscall_fork(ql: Qiling):
 def syscall_execve_onexit(ql: Qiling, pathname: int, argv: int, envp: int, retval: int):
     file_path = ql.os.utils.read_cstring(pathname)
     real_path = ql.os.path.transform_to_real_path(file_path)
+
+# -----------------------------------------------------------------
+def syscall__newselect(ql: Qiling, nfds: int, readfds: int, writefds: int, exceptfds: int, timeout: int):
+    return 1
