@@ -4,6 +4,7 @@ import traceback
 
 from qiling import Qiling
 from colibri.core.const import CATEGORY_FILESYSTEM
+from colibri.syscalls.common import common_syscall_exit
 
 from qiling.os.posix.const import *
 from qiling.os.posix.filestruct import ql_socket
@@ -38,7 +39,8 @@ def syscall_write(ql: Qiling, fd, buf, count):
         if hasattr(f, "name"):
             filename = f.name
         if isinstance(f, ql_socket):
-            filename = f"socket({f.ip}:{f.port})"
+            filename = f"socket({f.connected_ip}:{f.connected_port})"
+
         fs = ql.hb.report[CATEGORY_FILESYSTEM]
         pid = os.getpid()
         if not pid in fs:
@@ -49,13 +51,27 @@ def syscall_write(ql: Qiling, fd, buf, count):
             fs[pid]["write"][filename] = ""
         fs[pid]["write"][filename] += data.decode("utf-8")
         ql.hb.report[CATEGORY_FILESYSTEM] = fs
+
+        ql.hb.log_syscall(
+            name = "write",
+            args = {
+                "fd": fd,
+                "filename": filename,
+                "buf": data.decode("utf-8"),
+                "count": count,
+            },
+            retval = regreturn
+        )
     except Exception:
         ql.log.info(traceback.format_exc())
+
+    finally:
+        common_syscall_exit(ql)
 
     return regreturn
 
 # -----------------------------------------------------------------
-def open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
+def syscall_open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
     try:
         path = ql.os.utils.read_cstring(filename)
         ql.hb.add_report_info(
@@ -70,7 +86,7 @@ def open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
     except Exception:
         ql.log.info(traceback.format_exc())
 
-def open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval: int):
+def syscall_open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval: int):
     try:
         path = ql.os.utils.read_cstring(filename)
         ql.hb.log_syscall(

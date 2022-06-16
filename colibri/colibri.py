@@ -32,25 +32,35 @@ log.setLevel(logging.INFO)
 # -----------------------------------------------------------------
 class Colibri(metaclass=Singleton):
     replaced_syscall = {
-        "connect": syscall_connect,
-        "send": syscall_send,
-        "recv": syscall_recv,
-        "getsockname": syscall_getsockname,
+        # System
         "fork": syscall_fork,
         "vfork": syscall_vfork,
+        # Time
         "nanosleep": syscall_nanosleep,
         "clock_nanosleep": syscall_clock_nanosleep,
         "clock_nanosleep_time64": syscall_clock_nanosleep_time64,
+        # Network
+        "connect": syscall_connect,
+        "send": syscall_send,
+        "recv": syscall_recv,
         "setsockopt": syscall_setsockopt,
+        "getsockopt": syscall_getsockopt,
+        "getsockname": syscall_getsockname,
+        # Filesystem
         "write": syscall_write,
         "_newselect": syscall__newselect,
     }
     on_enter_hooks = {
-        "open": open_onenter,
+        "open": syscall_open_onenter,
+        # Network
+        "accept": syscall_accept_onenter,
     }
     on_exit_hooks = {
-        "open": open_onexit,
+        "open": syscall_open_onexit,
         "execve": syscall_execve_onexit,
+        # Network
+        "bind": syscall_bind_onexit,
+        "listen": syscall_listen_onexit,
     }
 
     # ---------------------------------------
@@ -93,7 +103,7 @@ class Colibri(metaclass=Singleton):
     # ---------------------------------------
     def set_hooks(self):
         for syscall_name, syscall_fn in self.replaced_syscall.items():
-            self.ql.set_syscall(syscall_name, syscall_fn)
+            self.ql.os.set_syscall(syscall_name, syscall_fn)
 
         for syscall_name, syscall_fn in self.on_enter_hooks.items():
             self.ql.os.set_syscall(syscall_name, syscall_fn, QL_INTERCEPT.ENTER)
@@ -107,11 +117,6 @@ class Colibri(metaclass=Singleton):
         self.running = Value(c_bool, False)
         self.ql.emu_stop()
 
-        with open(self.options.output_file, "w") as f:
-            f.write(
-                json.dumps(dict(self.report))
-            )
-
         log.info(
             "Stopping pids %s", ", ".join([str(x) for x in self.pids])
         )
@@ -123,6 +128,11 @@ class Colibri(metaclass=Singleton):
             except Exception:
                 pass
 
+        with open(self.options.output_file, "w") as f:
+            f.write(
+                json.dumps(dict(self.report))
+            )
+
     # ---------------------------------------
     def reset_filesystem(self):
         dirname    = os.path.dirname(__file__)
@@ -133,7 +143,7 @@ class Colibri(metaclass=Singleton):
         shutil.copytree(rootfs_dir, self.options.rootfs)
 
     # ---------------------------------------
-    def log_syscall(self, name, args, retval, extra = {}):
+    def log_syscall(self, name, args = {}, retval = None, extra = {}):
         try:
             toff = time.time() - self.analysis_start_time
             # Shared dicts are a bit special and are not updated

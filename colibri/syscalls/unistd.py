@@ -5,6 +5,7 @@ from qiling.const import QL_ARCH, QL_OS
 from multiprocessing import Process
 
 from qiling.os.windows.windows import QlOsWindows
+from colibri.syscalls.common import common_syscall_exit
 
 # -----------------------------------------------------------------
 def syscall_vfork(ql: Qiling):
@@ -48,8 +49,7 @@ def syscall_vfork(ql: Qiling):
         ql.log.debug(sys.exc_info()[0])
 
     finally:
-        if not ql.hb.running.value:
-            sys.exit(0)
+        common_syscall_exit(ql)
 
     return regreturn
 
@@ -64,4 +64,5 @@ def syscall_execve_onexit(ql: Qiling, pathname: int, argv: int, envp: int, retva
 
 # -----------------------------------------------------------------
 def syscall__newselect(ql: Qiling, nfds: int, readfds: int, writefds: int, exceptfds: int, timeout: int):
+    common_syscall_exit(ql)
     return 1
