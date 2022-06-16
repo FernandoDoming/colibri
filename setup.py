@@ -49,7 +49,7 @@ setup(
         "colibri.utils",
     ],
     install_requires=[
-        "qiling>=1.4.2",
+        "qiling>=1.4.3",
     ],
 
     classifiers=[

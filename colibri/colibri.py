@@ -88,7 +88,7 @@ class Colibri(metaclass=Singleton):
 
         # Doing this instead of Qiling's timeout because
         # Qiling's timeout does not stop forked children
-        signal.signal(signal.SIGALRM, self.stop)
+        signal.signal(signal.SIGALRM, self.handle_signal)
         signal.alarm(timeout)
         try:
             self.running = Value(c_bool, True)
@@ -96,6 +96,7 @@ class Colibri(metaclass=Singleton):
             self.ql.run()
         except Exception:
             log.exception("Failed to run Qiling on sample %s", fpath)
+            self.stop()
 
         while self.running.value:
             time.sleep(1)
@@ -112,7 +113,10 @@ class Colibri(metaclass=Singleton):
             self.ql.os.set_syscall(syscall_name, syscall_fn, QL_INTERCEPT.EXIT)
 
     # ---------------------------------------
-    def stop(self, signum, frame):
+    def handle_signal(self, signum, frame):
+        self.stop()
+
+    def stop(self):
         log.info("Colibri execution hit timeout. Stopping...")
         self.running = Value(c_bool, False)
         self.ql.emu_stop()

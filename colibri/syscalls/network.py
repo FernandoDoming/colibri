@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import struct
+import socket
 import random
 import ipaddress
 
@@ -23,26 +24,24 @@ from colibri.core.const import CATEGORY_NETWORK
 
 # -----------------------------------------------------------------
 def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
-    AF_UNIX = 1
-    AF_INET = 2
     sock_addr = ql.mem.read(connect_addr, connect_addrlen)
     family = ql.unpack16(sock_addr[ : 2])
     s = ql.os.fd[connect_sockfd]
-    ip = b''
-    sun_path = b''
+    ip = ""
+    sun_path = ""
     port = 0
     result = "mocked"
 
     try:
         if s.family == family:
-            if s.family == AF_UNIX:
+            if s.family == socket.AF_UNIX:
                 sun_path = sock_addr[2:].split(b"\x00")[0]
                 sun_path = ql.os.path.transform_to_real_path(sun_path.decode())
                 ql.log.debug("connect(%s) = %d" % (sun_path, regreturn))
                 s.connect(sun_path)
                 regreturn = 0
 
-            elif s.family == AF_INET:
+            elif s.family == socket.AF_INET:
                 port, host = struct.unpack(">HI", sock_addr[2:8])
                 ip = ql_bin_to_ip(host)
                 s.connected_ip = ip
@@ -70,6 +69,7 @@ def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
             extra = {
                 "host": ip,
                 "port": port,
+                "sun_path": sun_path,
                 "family": s.family.name,
                 "type": s.socktype.name,
                 "resolution": result,
@@ -156,7 +156,7 @@ def syscall_bind_onexit(ql: Qiling, bind_fd, bind_addr, bind_addrlen, retval: in
     host = ql_bin_to_ip(host)
 
     path = None
-    if sin_family == 1:
+    if sin_family == socket.AF_UNIX:
         path = data[2:].split(b'\x00')[0]
         path = ql.os.path.transform_to_real_path(path.decode())
 
