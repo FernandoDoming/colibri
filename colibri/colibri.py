@@ -23,6 +23,7 @@ from colibri.utils.cmdline import (
 )
 
 from colibri.core.classes import dotdict, Singleton
+from colibri.core.const import *
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 logging.basicConfig(format=LOG_FORMAT)
@@ -71,9 +72,10 @@ class Colibri(metaclass=Singleton):
         self.pids = self.smm.list()
         self.report = self.smm.dict()
         self.running = Value(c_bool, False)
-        self.report["syscalls"] = {}
-        self.report["filesystem"] = {}
-        self.report["network"] = {}
+        self.report[CATEGORY_PROCTREE]   = {}
+        self.report[CATEGORY_FILESYSTEM] = {}
+        self.report[CATEGORY_NETWORK]    = {}
+        self.report[CATEGORY_SYSCALLS]   = {}
 
         self.options = dotdict(**kwargs)
 
@@ -156,7 +158,7 @@ class Colibri(metaclass=Singleton):
             # Shared dicts are a bit special and are not updated
             # if not done like this
             # https://stackoverflow.com/a/48646169
-            syscalls = self.report["syscalls"]
+            syscalls = self.report[CATEGORY_SYSCALLS]
             caller_pid = os.getpid()
             if caller_pid not in syscalls:
                 syscalls[caller_pid] = []
@@ -167,12 +169,24 @@ class Colibri(metaclass=Singleton):
                 "return": retval,
                 "extra": extra,
             })
-            self.report["syscalls"] = syscalls
+            self.report[CATEGORY_SYSCALLS] = syscalls
         except Exception:
             log.debug(
                 "Failed to log syscall %s",
                 name
             )
+
+    # ---------------------------------------
+    def report_new_child(self, pid, ppid = None):
+        if not ppid:
+            ppid = os.getpid()
+        self.pids.append(pid)
+
+        proctree = self.report[CATEGORY_PROCTREE]
+        if ppid not in proctree:
+            proctree[ppid] = []
+        proctree[ppid].append(pid)
+        self.report[CATEGORY_PROCTREE] = proctree
 
     # ---------------------------------------
     def add_report_info(self, category: str, subcategory: str, data: dict):

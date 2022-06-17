@@ -30,7 +30,7 @@ def syscall_vfork(ql: Qiling):
             ql.os.child_processes = True
 
         if regreturn != 0:
-            ql.hb.pids.append(regreturn)
+            ql.hb.report_new_child(regreturn)
 
         if ql.os.thread_management:
             ql.emu_stop()
@@ -64,7 +64,7 @@ def syscall_clone_onexit(
     parent_tidptr: int, newtls: int, child_tidptr: int, retval: int
 ):
     if retval != 0:
-        ql.hb.pids.append(retval)
+        ql.hb.report_new_child(retval)
         ql.hb.log_syscall(
             name = "clone",
             args = {
