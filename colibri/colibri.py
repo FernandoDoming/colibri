@@ -52,12 +52,14 @@ class Colibri(metaclass=Singleton):
     }
     on_enter_hooks = {
         "open": syscall_open_onenter,
+        # execve does not return
+        "execve": syscall_execve_onenter,
         # Network
         "accept": syscall_accept_onenter,
     }
     on_exit_hooks = {
         "open": syscall_open_onexit,
-        "execve": syscall_execve_onexit,
+        "clone": syscall_clone_onexit,
         # Network
         "bind": syscall_bind_onexit,
         "listen": syscall_listen_onexit,
@@ -80,6 +82,7 @@ class Colibri(metaclass=Singleton):
         self.ql = qlapi.Qiling(
             [fpath],
             self.options.rootfs,
+            multithread = True,
             verbose=QL_VERBOSE.DEBUG if self.options.get("debug", False) else QL_VERBOSE.OFF
         )
         self.ql.hb = self

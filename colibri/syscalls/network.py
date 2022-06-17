@@ -19,7 +19,7 @@ from qiling.os.posix.const import *
 from qiling.os.posix.filestruct import ql_socket
 
 from colibri.syscalls.common import common_syscall_exit
-from colibri.utils.network_utils import ql_bin_to_ip, random_ipv4
+from colibri.utils.network import ql_bin_to_ip, random_ipv4
 from colibri.core.const import CATEGORY_NETWORK
 
 # -----------------------------------------------------------------
