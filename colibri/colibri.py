@@ -2,6 +2,7 @@ import os
 import json
 import time
 import random
+import hashlib
 import signal
 import logging
 import shutil
@@ -52,6 +53,8 @@ class Colibri(metaclass=Singleton):
         "_newselect": syscall__newselect,
     }
     on_enter_hooks = {
+        "exit": syscall_exit_oneneter,
+        "exit_group": syscall_exit_group_oneneter,
         "open": syscall_open_onenter,
         # execve does not return
         "execve": syscall_execve_onenter,
@@ -97,6 +100,10 @@ class Colibri(metaclass=Singleton):
         signal.alarm(timeout)
         try:
             self.running = Value(c_bool, True)
+            self.analyzed_sample = {
+                "path": fpath,
+                "sha256": hashlib.sha256(open(fpath, "rb").read()).hexdigest(),
+            }
             self.analysis_start_time = time.time()
             self.ql.run()
         except Exception:
@@ -137,10 +144,34 @@ class Colibri(metaclass=Singleton):
             except Exception:
                 pass
 
-        with open(self.options.output_file, "w") as f:
+        self.write_report()
+
+    def write_report(self):
+        root = self.get_root_dir()
+        anal_path = os.path.join(root, "results", self.analyzed_sample["sha256"])
+        if os.path.isdir(anal_path):
+            shutil.rmtree(anal_path)
+
+        os.makedirs(anal_path)
+        with open(os.path.join(anal_path, "report.json"), "w") as f:
             f.write(
                 json.dumps(dict(self.report))
             )
+
+        if self.options.get("dump", False):
+            dumps_path = os.path.join(anal_path, "dump")
+            os.makedirs(dumps_path)
+            for i, mem_info_tuple in enumerate(self.ql.mem.save().get("ram", [])):
+                lbound, ubound, perm, label, data = mem_info_tuple
+                if not label.startswith("["):
+                    f = open(os.path.join(dumps_path, f"{label}_{i}"), "wb")
+                    f.write(data)
+                    f.close()
+
+    def get_root_dir(self):
+        return os.path.join(
+            os.path.expanduser("~"), ".colibri"
+        )
 
     # ---------------------------------------
     def reset_filesystem(self):
@@ -188,6 +219,10 @@ class Colibri(metaclass=Singleton):
         proctree[ppid].append(pid)
         self.report[CATEGORY_PROCTREE] = proctree
 
+    def report_exit(self, status):
+        pid = os.getpid()
+        self.pids.remove(pid)
+
     # ---------------------------------------
     def add_report_info(self, category: str, subcategory: str, data: dict):
         try:
@@ -219,11 +254,6 @@ def main():
         default = default_rootfs
     )
     parser.add_argument(
-        "-o", "--output",
-        help = "Output file to write report to in JSON format (default: report.json)",
-        default = "report.json"
-    )
-    parser.add_argument(
         "-t", "--timeout",
         help = "Max time to run the sample for (default: 60)",
         default = 10,
@@ -240,6 +270,11 @@ def main():
         action = "store_true"
     )
     parser.add_argument(
+        "-d", "--dump",
+        help = "Enable memory dumps",
+        action = "store_true"
+    )
+    parser.add_argument(
         "-v",
         help = "Enable verbosity",
         action = "store_true"
@@ -250,14 +285,14 @@ def main():
         debug   = args.v,
         network = args.network,
         skip_sleep = not args.no_skip_sleep,
-        output_file = args.output,
-        rootfs  = args.rootfs,
+        rootfs = args.rootfs,
+        dump = args.dump,
     )
     print(cyan("[*] Running ") + yellow(args.file) + cyan(" with options:"))
     print("\t" + cyan("Rootfs: ") + args.rootfs)
     print("\t" + cyan("Network: ") + str(args.network))
     print("\t" + cyan("Timeout: ") + str(args.timeout) + "s")
-    print("\t" + cyan("Output: ") + args.output)
+    print("\t" + cyan("Dumps Enabled: ") + str(args.dump))
     print()
     sb.run(
         fpath   = args.file,
