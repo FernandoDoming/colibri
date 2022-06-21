@@ -36,21 +36,18 @@ def syscall_write(ql: Qiling, fd, buf, count):
             regreturn = -1
 
         filename = fd
+        extra = {}
         if hasattr(f, "name"):
             filename = f.name
         if isinstance(f, ql_socket):
             filename = f"socket({f.connected_ip}:{f.connected_port})"
-
-        fs = ql.hb.report[CATEGORY_FILESYSTEM]
-        pid = os.getpid()
-        if not pid in fs:
-            fs[pid] = {}
-        if not "write" in fs[pid]:
-            fs[pid]["write"] = {}
-        if not filename in fs[pid]["write"]:
-            fs[pid]["write"][filename] = ""
-        fs[pid]["write"][filename] += data.decode("utf-8")
-        ql.hb.report[CATEGORY_FILESYSTEM] = fs
+            extra = {
+                "ip": f.connected_ip,
+                "port": f.connected_port,
+                "family": f.family.name,
+                "type": f.socktype.name,
+                "data": data.decode("utf-8"),
+            }
 
         ql.hb.log_syscall(
             name = "write",
@@ -60,7 +57,8 @@ def syscall_write(ql: Qiling, fd, buf, count):
                 "buf": data.decode("utf-8"),
                 "count": count,
             },
-            retval = regreturn
+            retval = regreturn,
+            extra = extra
         )
     except Exception:
         ql.log.info(traceback.format_exc())

@@ -135,9 +135,11 @@ class Colibri(metaclass=Singleton):
         log.info("Colibri execution hit timeout. Stopping...")
         p = PostProcess(
             for_file = self.analyzed_sample["path"],
-            dump = self.options.get("dump", False),
         )
         p.run()
+        p.save()
+        if self.options.get("dump", False):
+            p.dump_ram()
 
         log.info(
             "Stopping pids %s", ", ".join([str(x) for x in self.pids])
