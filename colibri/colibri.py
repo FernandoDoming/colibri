@@ -50,12 +50,13 @@ class Colibri(metaclass=Singleton):
         "getsockname": syscall_getsockname,
         # Filesystem
         "write": syscall_write,
+        "unlink": syscall_unlink,
         "_newselect": syscall__newselect,
     }
     on_enter_hooks = {
-        "exit": syscall_exit_oneneter,
-        "exit_group": syscall_exit_group_oneneter,
-        "open": syscall_open_onenter,
+        # exit does not return
+        "exit": syscall_exit_onenter,
+        "exit_group": syscall_exit_group_onenter,
         # execve does not return
         "execve": syscall_execve_onenter,
         # Network
@@ -63,7 +64,9 @@ class Colibri(metaclass=Singleton):
     }
     on_exit_hooks = {
         "open": syscall_open_onexit,
+        "readlink": syscall_readlink_onexit,
         "clone": syscall_clone_onexit,
+        "close": syscall_close_onexit,
         # Network
         "bind": syscall_bind_onexit,
         "listen": syscall_listen_onexit,
@@ -73,45 +76,9 @@ class Colibri(metaclass=Singleton):
     def __init__(self, **kwargs) -> None:
         self.smm = Manager()
         self.pids = self.smm.list()
-        self.report = self.smm.dict()
         self.running = Value(c_bool, False)
-        self.report[CATEGORY_PROCTREE]   = {}
-        self.report[CATEGORY_FILESYSTEM] = {}
-        self.report[CATEGORY_NETWORK]    = {}
-        self.report[CATEGORY_SYSCALLS]   = {}
 
         self.options = dotdict(**kwargs)
-
-    # ---------------------------------------
-    def run(self, fpath, timeout = 10):
-        self.ql = qlapi.Qiling(
-            [fpath],
-            self.options.rootfs,
-            multithread = True,
-            verbose=QL_VERBOSE.DEBUG if self.options.get("debug", False) else QL_VERBOSE.OFF
-        )
-        self.ql.hb = self
-        self.set_hooks()
-        self.reset_filesystem()
-
-        # Doing this instead of Qiling's timeout because
-        # Qiling's timeout does not stop forked children
-        signal.signal(signal.SIGALRM, self.handle_signal)
-        signal.alarm(timeout)
-        try:
-            self.running = Value(c_bool, True)
-            self.analyzed_sample = {
-                "path": fpath,
-                "sha256": hashlib.sha256(open(fpath, "rb").read()).hexdigest(),
-            }
-            self.analysis_start_time = time.time()
-            self.ql.run()
-        except Exception:
-            log.exception("Failed to run Qiling on sample %s", fpath)
-            self.stop()
-
-        while self.running.value:
-            time.sleep(1)
 
     # ---------------------------------------
     def set_hooks(self):
@@ -125,13 +92,46 @@ class Colibri(metaclass=Singleton):
             self.ql.os.set_syscall(syscall_name, syscall_fn, QL_INTERCEPT.EXIT)
 
     # ---------------------------------------
+    def run(self, fpath, timeout = 10):
+        self.ql = qlapi.Qiling(
+            [fpath],
+            self.options.rootfs,
+            multithread = True,
+            verbose=QL_VERBOSE.DEBUG if self.options.get("debug", False) else QL_VERBOSE.OFF
+        )
+        self.ql.hb = self
+        self.analyzed_sample = {
+            "path": os.path.abspath(fpath),
+            "sha256": hashlib.sha256(open(fpath, "rb").read()).hexdigest(),
+        }
+        self.set_hooks()
+        self.reset_filesystem()
+        self.create_results_dir()
+        self.main_pid = os.getpid()
+
+        # Doing this instead of Qiling's timeout because
+        # Qiling's timeout does not stop forked children
+        signal.signal(signal.SIGALRM, self.handle_signal)
+        signal.alarm(timeout)
+        try:
+            self.running = Value(c_bool, True)
+            self.analysis_start_time = time.time()
+            self.ql.run()
+        except Exception:
+            log.exception("Failed to run Qiling on sample %s", fpath)
+            self.stop()
+
+        while self.running.value:
+            time.sleep(1)
+
+    # ---------------------------------------
     def handle_signal(self, signum, frame):
         self.stop()
 
     def stop(self):
-        log.info("Colibri execution hit timeout. Stopping...")
         self.running = Value(c_bool, False)
-        self.ql.emu_stop()
+        log.info("Colibri execution hit timeout. Stopping...")
+        self.write_full_report()
 
         log.info(
             "Stopping pids %s", ", ".join([str(x) for x in self.pids])
@@ -143,35 +143,29 @@ class Colibri(metaclass=Singleton):
                 os.kill(pid, 9)
             except Exception:
                 pass
+        self.ql.emu_stop()
 
-        self.write_report()
-
-    def write_report(self):
-        root = self.get_root_dir()
-        anal_path = os.path.join(root, "results", self.analyzed_sample["sha256"])
-        if os.path.isdir(anal_path):
-            shutil.rmtree(anal_path)
-
-        os.makedirs(anal_path)
-        with open(os.path.join(anal_path, "report.json"), "w") as f:
-            f.write(
-                json.dumps(dict(self.report))
-            )
-
-        if self.options.get("dump", False):
-            dumps_path = os.path.join(anal_path, "dump")
-            os.makedirs(dumps_path)
-            for i, mem_info_tuple in enumerate(self.ql.mem.save().get("ram", [])):
-                lbound, ubound, perm, label, data = mem_info_tuple
-                if not label.startswith("["):
-                    f = open(os.path.join(dumps_path, f"{label}_{i}"), "wb")
-                    f.write(data)
-                    f.close()
-
+    # ---------------------------------------
     def get_root_dir(self):
         return os.path.join(
             os.path.expanduser("~"), ".colibri"
         )
+
+    def get_current_sample_results_path(self):
+        if not self.analyzed_sample:
+            return None
+
+        return os.path.join(
+            self.get_root_dir(), "results", self.analyzed_sample["sha256"]
+        )
+
+    def create_results_dir(self):
+        anal_path = self.get_current_sample_results_path()
+        if os.path.isdir(anal_path):
+            shutil.rmtree(anal_path)
+        os.makedirs(anal_path)
+        with open(os.path.join(anal_path, "report.json"), "w") as f:
+            f.write("{}")
 
     # ---------------------------------------
     def reset_filesystem(self):
@@ -182,64 +176,109 @@ class Colibri(metaclass=Singleton):
             shutil.rmtree(self.options.rootfs)
         shutil.copytree(rootfs_dir, self.options.rootfs)
 
+        # Copy sample to the rootfs so its available to the analysis
+        sample_dir = os.path.dirname(self.analyzed_sample["path"])
+        target_dir = os.path.join(self.options.rootfs, sample_dir[1:])
+        os.makedirs(target_dir, exist_ok=True)
+        shutil.copy(self.analyzed_sample["path"], target_dir)
+
     # ---------------------------------------
-    def log_syscall(self, name, args = {}, retval = None, extra = {}):
+    def log_syscall(self, name, args = {}, retval = "None", extra = {}):
+        caller_pid = os.getpid()
+        if not self.running.value:
+            log.info(
+                "PID %d: Asked to log syscall %s but analysis has finished.",
+                caller_pid,
+                name
+            )
+            return
+
         try:
+            # log.debug(
+            #     "PID %d: %s(%s) = %s",
+            #     caller_pid,
+            #     name,
+            #     ", ".join([f"{k} = {v}" for k, v in args.items()]),
+            #     retval
+            # )
             toff = time.time() - self.analysis_start_time
-            # Shared dicts are a bit special and are not updated
-            # if not done like this
-            # https://stackoverflow.com/a/48646169
-            syscalls = self.report[CATEGORY_SYSCALLS]
-            caller_pid = os.getpid()
-            if caller_pid not in syscalls:
-                syscalls[caller_pid] = []
-            syscalls[caller_pid].append({
-                "name": name,
-                "time": toff,
-                "args": args,
-                "return": retval,
-                "extra": extra,
-            })
-            self.report[CATEGORY_SYSCALLS] = syscalls
+            r_path = self.get_current_sample_results_path()
+            with open(os.path.join(r_path, "syscalls.json"), "a") as f:
+                syscall_data = {
+                    "pid": caller_pid,
+                    "name": name,
+                    "time": toff,
+                    "args": args,
+                    "return": retval,
+                    "extra": extra,
+                }
+                f.write(json.dumps(syscall_data) + "\n")
+
         except Exception:
-            log.debug(
-                "Failed to log syscall %s",
+            log.exception(
+                "PID %d: Failed to log syscall %s",
+                caller_pid,
                 name
             )
 
     # ---------------------------------------
     def report_new_child(self, pid, ppid = None):
-        if not ppid:
-            ppid = os.getpid()
-        self.pids.append(pid)
+        try:
+            if not ppid:
+                ppid = os.getpid()
 
-        proctree = self.report[CATEGORY_PROCTREE]
-        if ppid not in proctree:
-            proctree[ppid] = []
-        proctree[ppid].append(pid)
-        self.report[CATEGORY_PROCTREE] = proctree
+            log.info("New child reportd. PID: %d, PPID: %d", pid, ppid)
+            self.pids.append(pid)
+
+            # proctree = self.report[CATEGORY_PROCTREE]
+            # if ppid not in proctree:
+            #     proctree[ppid] = []
+            # proctree[ppid].append(pid)
+            # self.report[CATEGORY_PROCTREE] = proctree
+        except Exception:
+            log.exception(
+                "Failed to report new child %d, PPID: %d",
+                pid,
+                ppid
+            )
 
     def report_exit(self, status):
-        pid = os.getpid()
-        self.pids.remove(pid)
+        try:
+            pid = os.getpid()
+            log.info("PID %d: Exited with status %d", pid, status)
+            if pid in self.pids:
+                self.pids.remove(pid)
+        except Exception:
+            log.exception("Failed to report exit %s", pid)
 
     # ---------------------------------------
-    def add_report_info(self, category: str, subcategory: str, data: dict):
-        try:
-            catinfo = self.report[category]
-            pid = os.getpid()
-            if pid not in catinfo:
-                catinfo[pid] = {}
-            if subcategory not in catinfo[pid]:
-                catinfo[pid][subcategory] = []
-            if data not in catinfo[pid][subcategory]:
-                catinfo[pid][subcategory].append(data)
-            self.report[category] = catinfo
-        except Exception:
-            log.debug(
-                "Failed to add report info. Data: %s. Cat: %s, Subcat: %s",
-                data, category, subcategory
+    def write_full_report(self):
+        report = {}
+        results_path = self.get_current_sample_results_path()
+        report[CATEGORY_STATIC] = self.analyzed_sample
+
+        report.setdefault(CATEGORY_SYSCALLS, {})
+        with open(os.path.join(results_path, "syscalls.json"), "r") as f:
+            for line in f:
+                syscall = json.loads(line)
+                pid = syscall.pop("pid", 0)
+                report[CATEGORY_SYSCALLS].setdefault(pid, [])
+                report[CATEGORY_SYSCALLS][pid].append(syscall)
+
+        with open(os.path.join(results_path, "report.json"), "w") as f:
+            f.write(
+                json.dumps(report)
             )
+
+        if self.options.get("dump", False):
+            dumps_path = os.path.join(results_path, "dump")
+            os.makedirs(dumps_path)
+            for i, mem_info_tuple in enumerate(self.ql.mem.save().get("ram", [])):
+                lbound, ubound, perm, label, data = mem_info_tuple
+                if not label.startswith("["):
+                    f = open(os.path.join(dumps_path, f"{label}_{i}"), "wb")
+                    f.write(data)
+                    f.close()
 
 # -----------------------------------------------------------------
 def main():
@@ -281,6 +320,9 @@ def main():
     )
     parser.add_argument("file")
     args = parser.parse_args()
+    if args.v:
+        log.setLevel(logging.DEBUG)
+
     sb = Colibri(
         debug   = args.v,
         network = args.network,

@@ -1,5 +1,5 @@
 import os
-import sys
+import pathlib
 import traceback
 
 from qiling import Qiling
@@ -71,21 +71,6 @@ def syscall_write(ql: Qiling, fd, buf, count):
     return regreturn
 
 # -----------------------------------------------------------------
-def syscall_open_onenter(ql: Qiling, filename: int, flags: int, mode: int):
-    try:
-        path = ql.os.utils.read_cstring(filename)
-        ql.hb.add_report_info(
-            category = CATEGORY_FILESYSTEM,
-            subcategory = "open",
-            data = {
-                "path": path,
-                "flags": flags,
-                "mode": mode,
-            }
-        )
-    except Exception:
-        ql.log.info(traceback.format_exc())
-
 def syscall_open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval: int):
     try:
         path = ql.os.utils.read_cstring(filename)
@@ -100,3 +85,59 @@ def syscall_open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval
         )
     except Exception:
         ql.log.info(traceback.format_exc())
+
+# -----------------------------------------------------------------
+def syscall_readlink_onexit(ql: Qiling, path_name: int, path_buff: int, path_buffsize: int, retval: int):
+    ql.hb.log_syscall(
+        name = "readlink",
+        args = {
+            "pathname": ql.os.utils.read_cstring(path_name),
+        },
+        retval = retval
+    )
+
+# -----------------------------------------------------------------
+def syscall_unlink(ql: Qiling, pathname: int):
+    file_path = ql.os.utils.read_cstring(pathname)
+    real_path = ql.os.path.transform_to_real_path(file_path)
+
+    regreturn = 0
+    # Don't actually delete anything
+    # opened_fds = [getattr(ql.os.fd[i], 'name', None) for i in range(NR_OPEN) if ql.os.fd[i] is not None]
+    # path = pathlib.Path(real_path)
+
+    # if any((real_path not in opened_fds, path.is_block_device(), path.is_fifo(), path.is_socket(), path.is_symlink())):
+    #     try:
+    #         os.unlink(real_path)
+    #     except FileNotFoundError:
+    #         ql.log.debug('No such file or directory')
+    #         regreturn = -1
+    #     except:
+    #         regreturn = -1
+    #     else:
+    #         regreturn = 0
+
+    # else:
+    #     regreturn = -1
+
+    # ql.log.debug("unlink(%s) = %d" % (file_path, regreturn))
+
+    ql.hb.log_syscall(
+        name = "unlink",
+        args = {
+            "pathname": file_path,
+        },
+        retval = regreturn
+    )
+
+    return regreturn
+
+# -----------------------------------------------------------------
+def syscall_close_onexit(ql: Qiling, fd: int, retval: int):
+    ql.hb.log_syscall(
+        name = "close",
+        args = {
+            "fd": fd,
+        },
+        retval = retval
+    )

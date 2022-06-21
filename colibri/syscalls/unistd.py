@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from qiling import Qiling
 from qiling.const import QL_ARCH, QL_OS
 from multiprocessing import Process
@@ -100,23 +101,23 @@ def syscall_execve_onenter(ql: Qiling, pathname: int, argv: int, envp: int):
     )
 
 # -----------------------------------------------------------------
-def syscall_exit_oneneter(ql: Qiling, status: int):
-    # ql.hb.report_exit(status)
+def syscall_exit_onenter(ql: Qiling, status: int):
     ql.hb.log_syscall(
         name = "exit",
         args = {
             "status": status,
         }
     )
+    ql.hb.report_exit(status)
 
-def syscall_exit_group_oneneter(ql: Qiling, status: int):
-    # ql.hb.report_exit(status)
+def syscall_exit_group_onenter(ql: Qiling, status: int):
     ql.hb.log_syscall(
         name = "exit_group",
         args = {
             "status": status,
         }
     )
+    ql.hb.report_exit(status)
 
 # -----------------------------------------------------------------
 def syscall__newselect(ql: Qiling, nfds: int, readfds: int, writefds: int, exceptfds: int, timeout: int):

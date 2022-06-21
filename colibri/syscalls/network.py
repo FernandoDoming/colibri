@@ -105,19 +105,6 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
                 except Exception:
                     pass
 
-            ql.hb.add_report_info(
-                category = CATEGORY_NETWORK,
-                subcategory = "sent_data",
-                data = {
-                    "fd": send_sockfd,
-                    "ip": s.connected_ip,
-                    "port": s.connected_port,
-                    "family": s.family.name,
-                    "type": s.socktype.name,
-                    "data": tmp_buf.decode("utf-8"),
-                }
-            )
-
             ql.hb.log_syscall(
                 name = "send",
                 args = {
