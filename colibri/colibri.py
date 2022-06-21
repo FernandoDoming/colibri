@@ -283,8 +283,6 @@ class Colibri(metaclass=Singleton):
 # -----------------------------------------------------------------
 def main():
     import argparse
-    print_banner()
-
     parser = argparse.ArgumentParser()
     default_rootfs = os.path.join(os.path.expanduser("~"), ".colibri", "rootfs")
     parser.add_argument(
@@ -318,9 +316,16 @@ def main():
         help = "Enable verbosity",
         action = "store_true"
     )
+    parser.add_argument(
+        "-q",
+        help = "Enable quiet mode",
+        action = "store_true"
+    )
     parser.add_argument("file")
     args = parser.parse_args()
-    if args.v:
+    if args.q:
+        log.setLevel(logging.ERROR)
+    elif args.v:
         log.setLevel(logging.DEBUG)
 
     sb = Colibri(
@@ -330,12 +335,14 @@ def main():
         rootfs = args.rootfs,
         dump = args.dump,
     )
-    print(cyan("[*] Running ") + yellow(args.file) + cyan(" with options:"))
-    print("\t" + cyan("Rootfs: ") + args.rootfs)
-    print("\t" + cyan("Network: ") + str(args.network))
-    print("\t" + cyan("Timeout: ") + str(args.timeout) + "s")
-    print("\t" + cyan("Dumps Enabled: ") + str(args.dump))
-    print()
+    if not args.q:
+        print_banner()
+        print(cyan("[*] Running ") + yellow(args.file) + cyan(" with options:"))
+        print("\t" + cyan("Rootfs: ") + args.rootfs)
+        print("\t" + cyan("Network: ") + str(args.network))
+        print("\t" + cyan("Timeout: ") + str(args.timeout) + "s")
+        print("\t" + cyan("Dumps Enabled: ") + str(args.dump))
+        print()
     sb.run(
         fpath   = args.file,
         timeout = args.timeout,
