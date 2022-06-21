@@ -19,9 +19,10 @@ class PostProcess:
     def run(self):
         self.report[CATEGORY_STATIC] = self.static_info
         self.report.setdefault(CATEGORY_SYSCALLS, {})
-        self.report[CATEGORY_SYSCALLS] = self.parse_syscalls()
-        self.report[CATEGORY_PROCTREE] = self.build_proctree()
-        self.report[CATEGORY_NETWORK]  = self.extract_netinfo()
+        self.report[CATEGORY_SYSCALLS]   = self.parse_syscalls()
+        self.report[CATEGORY_PROCTREE]   = self.build_proctree()
+        self.report[CATEGORY_NETWORK]    = self.extract_netinfo()
+        self.report[CATEGORY_FILESYSTEM] = self.extract_fsinfo()
 
     def save(self):
         r_path = get_sample_results_path(self.static_info["sha256"])
@@ -98,3 +99,25 @@ class PostProcess:
                     netinfo["sent_data"].setdefault(key, [])
                     netinfo["sent_data"][key] = syscall["extra"]["data"]
         return netinfo
+
+    # ---------------------------------------
+    def extract_fsinfo(self):
+        fsinfo = {
+            "open": [],
+            "written": {},
+            "removed": [],
+        }
+        for pid, syscalls in self.report[CATEGORY_SYSCALLS].items():
+            for syscall in syscalls:
+                sname = syscall["name"]
+                if sname == "open":
+                    fsinfo["open"].append(syscall["args"])
+
+                elif sname == "write" and not syscall["args"]["filename"].startswith("socket("):
+                    file = syscall["args"]["filename"]
+                    fsinfo["written"].setdefault(file, "")
+                    fsinfo["written"][file] += syscall["args"]["buf"]
+
+                elif sname == "unlink":
+                    fsinfo["removed"].append(syscall["args"])
+        return fsinfo
