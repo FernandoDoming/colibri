@@ -24,7 +24,9 @@ from colibri.utils.cmdline import (
 )
 
 from colibri.core.classes import dotdict, Singleton
+from colibri.core.postprocess import PostProcess
 from colibri.core.const import *
+from colibri.utils.cwd import get_sample_results_path
 
 LOG_FORMAT = "%(asctime)-15s [%(levelname)s] - %(message)s"
 logging.basicConfig(format=LOG_FORMAT)
@@ -131,7 +133,11 @@ class Colibri(metaclass=Singleton):
     def stop(self):
         self.running = Value(c_bool, False)
         log.info("Colibri execution hit timeout. Stopping...")
-        self.write_full_report()
+        p = PostProcess(
+            for_file = self.analyzed_sample["path"],
+            dump = self.options.get("dump", False),
+        )
+        p.run()
 
         log.info(
             "Stopping pids %s", ", ".join([str(x) for x in self.pids])
@@ -146,21 +152,8 @@ class Colibri(metaclass=Singleton):
         self.ql.emu_stop()
 
     # ---------------------------------------
-    def get_root_dir(self):
-        return os.path.join(
-            os.path.expanduser("~"), ".colibri"
-        )
-
-    def get_current_sample_results_path(self):
-        if not self.analyzed_sample:
-            return None
-
-        return os.path.join(
-            self.get_root_dir(), "results", self.analyzed_sample["sha256"]
-        )
-
     def create_results_dir(self):
-        anal_path = self.get_current_sample_results_path()
+        anal_path = get_sample_results_path(self.analyzed_sample["sha256"])
         if os.path.isdir(anal_path):
             shutil.rmtree(anal_path)
         os.makedirs(anal_path)
@@ -202,7 +195,7 @@ class Colibri(metaclass=Singleton):
             #     retval
             # )
             toff = time.time() - self.analysis_start_time
-            r_path = self.get_current_sample_results_path()
+            r_path = get_sample_results_path(self.analyzed_sample["sha256"])
             with open(os.path.join(r_path, "syscalls.json"), "a") as f:
                 syscall_data = {
                     "pid": caller_pid,
@@ -250,35 +243,6 @@ class Colibri(metaclass=Singleton):
                 self.pids.remove(pid)
         except Exception:
             log.exception("Failed to report exit %s", pid)
-
-    # ---------------------------------------
-    def write_full_report(self):
-        report = {}
-        results_path = self.get_current_sample_results_path()
-        report[CATEGORY_STATIC] = self.analyzed_sample
-
-        report.setdefault(CATEGORY_SYSCALLS, {})
-        with open(os.path.join(results_path, "syscalls.json"), "r") as f:
-            for line in f:
-                syscall = json.loads(line)
-                pid = syscall.pop("pid", 0)
-                report[CATEGORY_SYSCALLS].setdefault(pid, [])
-                report[CATEGORY_SYSCALLS][pid].append(syscall)
-
-        with open(os.path.join(results_path, "report.json"), "w") as f:
-            f.write(
-                json.dumps(report)
-            )
-
-        if self.options.get("dump", False):
-            dumps_path = os.path.join(results_path, "dump")
-            os.makedirs(dumps_path)
-            for i, mem_info_tuple in enumerate(self.ql.mem.save().get("ram", [])):
-                lbound, ubound, perm, label, data = mem_info_tuple
-                if not label.startswith("["):
-                    f = open(os.path.join(dumps_path, f"{label}_{i}"), "wb")
-                    f.write(data)
-                    f.close()
 
 # -----------------------------------------------------------------
 def main():
