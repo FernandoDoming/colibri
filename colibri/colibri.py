@@ -14,6 +14,7 @@ from multiprocessing import Manager, Value
 from qiling import Qiling
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
 from qiling.os.posix.const import NR_OPEN
+from regex import B
 
 from colibri.syscalls.network import *
 from colibri.syscalls.filesystem import *
@@ -103,7 +104,7 @@ class Colibri(metaclass=Singleton):
     # ---------------------------------------
     def run(self, fpath, timeout = 10):
         self.ql = Qiling(
-            argv = [fpath],
+            argv = [fpath] + self.options.args,
             rootfs = self.options.rootfs,
             env = self.options.env,
             multithread = True,
@@ -257,13 +258,12 @@ class Colibri(metaclass=Singleton):
 # -----------------------------------------------------------------
 class __arg_env(argparse.Action):
     def __call__(self, parser, namespace, values, option_string):
-        if os.path.exists(values):
-            with open(values, 'rb') as f:
-                env = pickle.load(f)
-        else:
-            env = ast.literal_eval(values)
-
-        setattr(namespace, self.dest, env or {})
+        env = getattr(namespace, self.dest) or {}
+        for envstring in values:
+            split = envstring.split("=")
+            if len(split) == 2:
+                env[split[0]] = split[1]
+        setattr(namespace, self.dest, env)
 
 def main():
     parser = argparse.ArgumentParser()
@@ -272,6 +272,22 @@ def main():
         "-fs", "--rootfs",
         help = "Root directory to use as filesystem (default: %s)" % default_rootfs,
         default = default_rootfs
+    )
+    parser.add_argument(
+        "--args",
+        default=[],
+        metavar="ARGV",
+        nargs="*",
+        dest="args",
+        help="Run arguments"
+    )
+    parser.add_argument(
+        "--env",
+        metavar="KEY=VALUE",
+        action=__arg_env,
+        nargs="*",
+        default={},
+        help="Environment variables"
     )
     parser.add_argument(
         "-t", "--timeout",
@@ -304,13 +320,6 @@ def main():
         help = "Enable quiet mode",
         action = "store_true"
     )
-    parser.add_argument(
-        "--env",
-        metavar="FILE",
-        action=__arg_env,
-        default={},
-        help="pickle file containing an environment dictionary"
-    )
     parser.add_argument("file")
     args = parser.parse_args()
     if args.q:
@@ -319,17 +328,20 @@ def main():
         log.setLevel(logging.DEBUG)
 
     sb = Colibri(
+        args = args.args,
+        env = args.env,
         debug   = args.v,
         network = args.network,
         skip_sleep = not args.no_skip_sleep,
         rootfs = args.rootfs,
         dump = args.dump,
-        env = args.env,
     )
     if not args.q:
         print_banner()
         print(cyan("[*] Running ") + yellow(args.file) + cyan(" with options:"))
         print("\t" + cyan("Rootfs: ") + args.rootfs)
+        print("\t" + cyan("Args: ") + " ".join(args.args))
+        print("\t" + cyan("Env: ") + str(args.env))
         print("\t" + cyan("Network: ") + str(args.network))
         print("\t" + cyan("Timeout: ") + str(args.timeout) + "s")
         print("\t" + cyan("Dumps Enabled: ") + str(args.dump))
