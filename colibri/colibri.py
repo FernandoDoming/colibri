@@ -5,12 +5,13 @@ import random
 import hashlib
 import signal
 import logging
+import argparse
 import shutil
 
 from ctypes import c_bool
 from multiprocessing import Manager, Value
 
-import qiling as qlapi
+from qiling import Qiling
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
 from qiling.os.posix.const import NR_OPEN
 
@@ -18,6 +19,7 @@ from colibri.syscalls.network import *
 from colibri.syscalls.filesystem import *
 from colibri.syscalls.time import *
 from colibri.syscalls.unistd import *
+from colibri.syscalls.signal import *
 
 from colibri.utils.cmdline import (
     blue, red, yellow, green, magenta, cyan,
@@ -39,6 +41,9 @@ class Colibri(metaclass=Singleton):
         # System
         "fork": syscall_fork,
         "vfork": syscall_vfork,
+        "prctl": syscall_prctl,
+        "signal": syscall_signal,
+        "kill": syscall_kill,
         # Time
         "nanosleep": syscall_nanosleep,
         "clock_nanosleep": syscall_clock_nanosleep,
@@ -69,6 +74,8 @@ class Colibri(metaclass=Singleton):
         "readlink": syscall_readlink_onexit,
         "clone": syscall_clone_onexit,
         "close": syscall_close_onexit,
+        "setsid": syscall_setsid_onexit,
+        "rt_sigaction": syscall_rt_sigaction_onexit,
         # Network
         "bind": syscall_bind_onexit,
         "listen": syscall_listen_onexit,
@@ -95,9 +102,10 @@ class Colibri(metaclass=Singleton):
 
     # ---------------------------------------
     def run(self, fpath, timeout = 10):
-        self.ql = qlapi.Qiling(
-            [fpath],
-            self.options.rootfs,
+        self.ql = Qiling(
+            argv = [fpath],
+            rootfs = self.options.rootfs,
+            env = self.options.env,
             multithread = True,
             verbose=QL_VERBOSE.DEBUG if self.options.get("debug", False) else QL_VERBOSE.OFF
         )
@@ -247,8 +255,17 @@ class Colibri(metaclass=Singleton):
             log.exception("Failed to report exit %s", pid)
 
 # -----------------------------------------------------------------
+class __arg_env(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string):
+        if os.path.exists(values):
+            with open(values, 'rb') as f:
+                env = pickle.load(f)
+        else:
+            env = ast.literal_eval(values)
+
+        setattr(namespace, self.dest, env or {})
+
 def main():
-    import argparse
     parser = argparse.ArgumentParser()
     default_rootfs = os.path.join(os.path.expanduser("~"), ".colibri", "rootfs")
     parser.add_argument(
@@ -287,6 +304,13 @@ def main():
         help = "Enable quiet mode",
         action = "store_true"
     )
+    parser.add_argument(
+        "--env",
+        metavar="FILE",
+        action=__arg_env,
+        default={},
+        help="pickle file containing an environment dictionary"
+    )
     parser.add_argument("file")
     args = parser.parse_args()
     if args.q:
@@ -300,6 +324,7 @@ def main():
         skip_sleep = not args.no_skip_sleep,
         rootfs = args.rootfs,
         dump = args.dump,
+        env = args.env,
     )
     if not args.q:
         print_banner()

@@ -7,6 +7,7 @@ from multiprocessing import Process
 
 from qiling.os.windows.windows import QlOsWindows
 from colibri.syscalls.common import common_syscall_exit
+from colibri.syscalls.const import *
 from colibri.utils.mem import read_str_array
 
 # -----------------------------------------------------------------
@@ -123,3 +124,27 @@ def syscall_exit_group_onenter(ql: Qiling, status: int):
 def syscall__newselect(ql: Qiling, nfds: int, readfds: int, writefds: int, exceptfds: int, timeout: int):
     common_syscall_exit(ql)
     return 1
+
+# -----------------------------------------------------------------
+def syscall_prctl(ql: Qiling, option: int, arg2: int, arg3: int, arg4: int, arg5: int):
+    retval = 0
+
+    args = {
+        "option": PR_CONSTANT_NAMES.get(option, option)
+    }
+    if option == PR_SET_NAME:
+        args["process_name"] = ql.os.utils.read_cstring(arg2)
+
+    ql.hb.log_syscall(
+        name = "prctl",
+        args = args,
+        retval = retval
+    )
+    return retval
+
+# -----------------------------------------------------------------
+def syscall_setsid_onexit(ql: Qiling, retval: int):
+    ql.hb.log_syscall(
+        name = "setsid",
+        retval = retval
+    )
