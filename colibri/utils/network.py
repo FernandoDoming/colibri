@@ -11,3 +11,7 @@ def random_ipv4():
     n3 = random.choice(range(1, 254))
     n4 = random.choice(range(1, 254))
     return f"{n1}.{n2}.{n3}.{n4}"
+
+def random_private_ipv4():
+    n4 = random.choice(range(1, 254))
+    return f"192.168.1.{n4}"

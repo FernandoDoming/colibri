@@ -25,7 +25,7 @@ from colibri.utils.cmdline import (
     blue, red, yellow, green, magenta, cyan,
 )
 
-from colibri.core.classes import dotdict
+from colibri.core.classes import dotdict, AtomicOpen
 from colibri.core.postprocess import PostProcess
 from colibri.core.const import *
 from colibri.utils.cwd import get_sample_results_path
@@ -49,9 +49,12 @@ class Colibri():
         "clock_nanosleep": syscall_clock_nanosleep,
         "clock_nanosleep_time64": syscall_clock_nanosleep_time64,
         # Network
+        "socket": syscall_socket,
         "connect": syscall_connect,
         "send": syscall_send,
+        "sendto": syscall_sendto,
         "recv": syscall_recv,
+        "recvfrom": syscall_recvfrom,
         "accept": syscall_accept,
         "setsockopt": syscall_setsockopt,
         "getsockopt": syscall_getsockopt,
@@ -83,7 +86,6 @@ class Colibri():
     # ---------------------------------------
     def __init__(self, **kwargs) -> None:
         self.smm = Manager()
-        self.pids = self.smm.list()
         self.running = Value(c_bool, False)
 
         self.options = dotdict(**kwargs)
@@ -133,7 +135,7 @@ class Colibri():
         # ql.run() returns when the original process exits
         # but malware may create detached childs that keep running
         # wait them until timeout if there are childs
-        while self.running.value and self.pids:
+        while self.running.value and self.get_running_pids():
             time.sleep(.2)
 
     # ---------------------------------------
@@ -152,10 +154,11 @@ class Colibri():
         if self.options.get("dump", False):
             p.dump_ram()
 
+        pids = self.get_running_pids()
         log.info(
-            "Stopping pids %s", ", ".join([str(x) for x in self.pids])
+            "Stopping pids %s", ", ".join([str(x) for x in pids])
         )
-        for pid in self.pids:
+        for pid in pids:
             if pid == os.getpid():
                 continue
             try:
@@ -228,19 +231,32 @@ class Colibri():
             )
 
     # ---------------------------------------
+    def get_running_pids(self) -> list:
+        r_path = get_sample_results_path(self.analyzed_sample["sha256"])
+        pidf = os.path.join(r_path, "pids.json")
+        if not os.path.isfile(pidf):
+            return []
+
+        with AtomicOpen(pidf, "r") as f:
+            d = f.read()
+            if not d:
+                return []
+            return json.loads(d)
+
     def report_new_child(self, pid, ppid = None):
         try:
             if not ppid:
                 ppid = os.getpid()
 
-            log.info("New child reportd. PID: %d, PPID: %d", pid, ppid)
-            self.pids.append(pid)
+            pids = self.get_running_pids()
+            r_path = get_sample_results_path(self.analyzed_sample["sha256"])
+            pidf = os.path.join(r_path, "pids.json")
+            with AtomicOpen(pidf, "w") as f:
+                pids.append(pid)
+                f.write(json.dumps(pids))
 
-            # proctree = self.report[CATEGORY_PROCTREE]
-            # if ppid not in proctree:
-            #     proctree[ppid] = []
-            # proctree[ppid].append(pid)
-            # self.report[CATEGORY_PROCTREE] = proctree
+            log.info("New child reported. PID: %d, PPID: %d", pid, ppid)
+
         except Exception:
             log.exception(
                 "Failed to report new child %d, PPID: %d",
@@ -251,9 +267,16 @@ class Colibri():
     def report_exit(self, status):
         try:
             pid = os.getpid()
+            pids = self.get_running_pids()
+            r_path = get_sample_results_path(self.analyzed_sample["sha256"])
+            pidf = os.path.join(r_path, "pids.json")
+            if pid in pids:
+                pids.remove(pid)
+
+            with AtomicOpen(pidf, "w") as f:
+                f.write(json.dumps(pids))
+
             log.info("PID %d: Exited with status %d", pid, status)
-            if pid in self.pids:
-                self.pids.remove(pid)
         except Exception:
             log.exception("Failed to report exit %s", pid)
 

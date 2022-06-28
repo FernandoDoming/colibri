@@ -19,8 +19,76 @@ from qiling.os.posix.const import *
 from qiling.os.posix.filestruct import ql_socket
 
 from colibri.syscalls.common import common_syscall_exit
-from colibri.utils.network import ql_bin_to_ip, random_ipv4
+from colibri.utils.network import ql_bin_to_ip, random_ipv4, random_private_ipv4
 from colibri.core.const import CATEGORY_NETWORK
+
+# -----------------------------------------------------------------
+def syscall_socket(ql: Qiling, socket_domain, socket_type, socket_protocol):
+    idx = next((i for i in range(NR_OPEN) if ql.os.fd[i] is None), -1)
+    regreturn = idx
+
+    if idx != -1:
+        # ql_socket.open should use host platform based socket_type.
+        try:
+            emu_socket_value = socket_type
+            emu_socket_type = socket_type_mapping(socket_type, ql.arch.type, ql.os.type)
+            socket_type = getattr(socket, emu_socket_type)
+            ql.log.debug(f'Convert emu_socket_type {emu_socket_type}:{emu_socket_value} to host platform based socket_type {emu_socket_type}:{socket_type}')
+
+        except AttributeError:
+            ql.log.error(f'Cannot convert emu_socket_type {emu_socket_type}:{emu_socket_value} to host platform based socket_type')
+            raise
+
+        except Exception:
+            ql.log.error(f'Cannot convert emu_socket_type {emu_socket_value} to host platform based socket_type')
+            raise
+
+        mock_socket_type = socket_type
+        mock_socket_proto = socket_protocol
+        if os.geteuid() != 0 and socket_type == socket.SOCK_RAW and not ql.hb.options.get("network", False):
+            # non root users (or bins without cap_net_raw permissions) cannot open RAW sockets
+            # as such, change the type to something else if network emulation is enabled
+            mock_socket_type = socket.SOCK_DGRAM
+            mock_socket_proto = 0
+
+        try:
+            if ql.verbose >= QL_VERBOSE.DEBUG:  # set REUSEADDR options under debug mode
+                ql.os.fd[idx] = ql_socket.open(
+                    socket_domain,
+                    mock_socket_type,
+                    mock_socket_proto,
+                    (socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                )
+            else:
+                ql.os.fd[idx] = ql_socket.open(
+                    socket_domain,
+                    mock_socket_type,
+                    mock_socket_proto
+                )
+        except OSError as e:  # May raise error: Protocol not supported
+            ql.log.debug(f'{e}: {socket_domain=}, {socket_type=}, {socket_protocol=}')
+            regreturn = -1
+
+    socket_type = socket_type_mapping(socket_type, ql.arch.type, ql.os.type)
+    socket_domain = socket_domain_mapping(socket_domain, ql.arch.type, ql.os.type)
+    ql.log.debug("socket(%s, %s, %s) = %d" % (socket_domain, socket_type, socket_protocol, regreturn))
+
+    ql.hb.log_syscall(
+        name = "socket",
+        args = {
+            "socket_domain": socket_domain,
+            "socket_type": socket_type,
+            "socket_protocol": socket_protocol
+        },
+        retval = regreturn,
+        extra = {
+            "mocked_socket_type": mock_socket_type,
+            "mocked_socket_protocol": mock_socket_proto
+        }
+    )
+
+    return regreturn
+
 
 # -----------------------------------------------------------------
 def syscall_connect(ql, connect_sockfd, connect_addr, connect_addrlen):
@@ -104,6 +172,8 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
                     )
                 except Exception:
                     pass
+            else:
+                regreturn = send_len
 
             ql.hb.log_syscall(
                 name = "send",
@@ -129,6 +199,80 @@ def syscall_send(ql, send_sockfd, send_buf, send_len, send_flags):
            common_syscall_exit(ql)
     else:
         regreturn = -1
+    return regreturn
+
+
+def syscall_sendto(
+    ql: Qiling,
+    sockfd: int,
+    sendto_buf,
+    sendto_len,
+    sendto_flags,
+    sendto_addr,
+    sendto_addrlen
+):
+    regreturn = 0
+    if sockfd not in range(NR_OPEN):
+        regreturn = -1
+
+    s = ql.os.fd[sockfd]
+    if s is None:
+        regreturn = -1
+
+    if regreturn != -1:
+        # For x8664, sendto() is called finally when calling send() in TCP communications
+        if s.socktype == socket.SOCK_STREAM:
+            return syscall_send(ql, sockfd, sendto_buf, sendto_len, sendto_flags)
+
+        try:
+            tmp_buf = ql.mem.read(sendto_buf, sendto_len)
+
+            if ql.arch.type== QL_ARCH.X8664:
+                data = ql.mem.read(sendto_addr, 8)
+            else:
+                data = ql.mem.read(sendto_addr, sendto_addrlen)
+
+            sin_family, = struct.unpack("<h", data[:2])
+            port, host = struct.unpack(">HI", data[2:8])
+            host = ql_bin_to_ip(host)
+
+            if sin_family == socket.AF_UNIX:
+                path = data[2:].split(b'\x00')[0]
+                path = ql.os.path.transform_to_real_path(path.decode())
+
+                ql.log.debug("sendto() path is " + str(path))
+                regreturn = s.sendto(bytes(tmp_buf), sendto_flags, path)
+            else:
+                ql.log.debug("sendto() addr is %s:%d" % (host, port))
+                if ql.hb.options.get("network", False):
+                    regreturn = s.sendto(bytes(tmp_buf), sendto_flags, (host, port))
+                else:
+                    regreturn = sendto_len
+
+
+        except:
+            ql.log.debug(sys.exc_info()[0])
+
+            if ql.verbose >= QL_VERBOSE.DEBUG:
+                raise
+
+    ql.hb.log_syscall(
+        name = "sendto",
+        args = {
+            "fd": sockfd,
+            "len": sendto_len,
+            "flags": sendto_flags,
+        },
+        retval = regreturn,
+        extra = {
+            "ip": s.connected_ip,
+            "port": s.connected_port,
+            "family": s.family.name,
+            "type": s.socktype.name,
+            "data": tmp_buf.decode("utf-8"),
+        }
+    )
+
     return regreturn
 
 # -----------------------------------------------------------------
@@ -299,6 +443,72 @@ def syscall_recv(ql, sockfd: int, buf: int, length: int, flags: int):
     common_syscall_exit(ql)
     return len(content)
 
+
+def syscall_recvfrom(
+    ql: Qiling,
+    sockfd: int,
+    buf: int,
+    length: int,
+    flags: int,
+    addr: int,
+    addrlen: int
+):
+    regreturn = 0
+    if sockfd not in range(NR_OPEN):
+        regreturn = -1
+
+    sock = ql.os.fd[sockfd]
+    if sock is None:
+        regreturn = -1
+
+    if regreturn != -1:
+        # For x8664, recvfrom() is called finally when calling recv() in TCP communications
+        if sock.socktype == socket.SOCK_STREAM:
+            return syscall_recv(ql, sockfd, buf, length, flags)
+
+        if ql.hb.options.get("network", False):
+            tmp_buf, tmp_addr = sock.recvfrom(length, flags)
+        else:
+            tmp_buf = b""
+            if hasattr(sock, "connected_ip") and hasattr(sock, "connected_port"):
+                tmp_addr = (sock.connected_ip, sock.connected_port)
+            else:
+                tmp_addr = (random_ipv4(), random.randint(0, 65535))
+
+        ql.log.debug("recvfrom() CONTENT: %s", tmp_buf)
+        sin_family = int(sock.family)
+        data = struct.pack("<h", sin_family)
+
+        if sin_family == 1:
+            ql.log.debug("recvfrom() path is " + tmp_addr)
+            data += tmp_addr.encode()
+        else:
+            ql.log.debug("recvfrom() addr is %s:%d" % (tmp_addr[0], tmp_addr[1]))
+            data += struct.pack(">H", tmp_addr[1])
+            data += ipaddress.ip_address(tmp_addr[0]).packed
+            addrlen = ql.mem.read_ptr(addrlen)
+            data = data[:addrlen]
+
+        ql.mem.write(addr, data)
+        ql.mem.write(buf, tmp_buf)
+        regreturn = len(tmp_buf)
+
+    ql.hb.log_syscall(
+        name = "recvfrom",
+        args = {
+            "fd": sockfd,
+            "flags": flags,
+        },
+        retval = regreturn,
+        extra = {
+            "family": sock.family.name,
+            "type": sock.socktype.name,
+            "content": tmp_buf.decode("utf-8"),
+            "recvfrom_addr_ip": tmp_addr[0],
+            "recvfrom_addr_port": tmp_addr[1]
+        }
+    )
+    return regreturn
 # -----------------------------------------------------------------
 def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
     if 0 <= sockfd < NR_OPEN:
@@ -310,7 +520,7 @@ def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
                 host, port = socket.getpeername()
                 resolution = "success"
             else:
-                host = random_ipv4()
+                host = random_private_ipv4()
                 port = random.randint(0, 65535)
                 resolution = "mocked"
 
@@ -347,11 +557,21 @@ def syscall_getsockname(ql: Qiling, sockfd: int, addr: int, addrlenptr: int):
 
 # -----------------------------------------------------------------
 def syscall_setsockopt(ql: Qiling, sockfd, level, optname, optval_addr, optlen):
-    if sockfd not in range(NR_OPEN) or ql.os.fd[sockfd] is None:
-        return -EBADF
-
     regreturn = 0
-    common_syscall_exit(ql)
+    if sockfd not in range(NR_OPEN) or ql.os.fd[sockfd] is None:
+        regreturn = -EBADF
+
+    ql.hb.log_syscall(
+        name = "setsockopt",
+        args = {
+            "sockfd": sockfd,
+            "level": level,
+            "optname": optname,
+            "optval_addr": optval_addr,
+            "optlen": optlen
+        },
+        retval = regreturn,
+    )
     return regreturn
 
 # -----------------------------------------------------------------
