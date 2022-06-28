@@ -8,6 +8,8 @@ from colibri.syscalls.common import common_syscall_exit
 
 from qiling.os.posix.const import *
 from qiling.os.posix.filestruct import ql_socket
+from qiling.os.posix.const_mapping import ql_open_flag_mapping
+from qiling.exception import QlSyscallError
 
 # -----------------------------------------------------------------
 def syscall_write(ql: Qiling, fd, buf, count):
@@ -85,14 +87,38 @@ def syscall_open_onexit(ql: Qiling, filename: int, flags: int, mode: int, retval
         ql.log.info(traceback.format_exc())
 
 # -----------------------------------------------------------------
-def syscall_readlink_onexit(ql: Qiling, path_name: int, path_buff: int, path_buffsize: int, retval: int):
+def syscall_readlink(ql: Qiling, path_name: int, path_buff: int, path_buffsize: int):
+    pathname = ql.os.utils.read_cstring(path_name)
+    # pathname = str(pathname, 'utf-8', errors="ignore")
+    real_path = ql.os.path.transform_to_link_path(pathname)
+    relative_path = ql.os.path.transform_to_relative_path(pathname)
+
+    if not os.path.exists(real_path):
+        regreturn = -1
+
+    elif relative_path == r'/proc/self/exe':
+        localpath = os.path.abspath(ql.path)
+        if localpath.startswith(ql.rootfs):
+            localpath = localpath.replace(ql.rootfs, "")
+        localpath = bytes(localpath, 'utf-8') + b'\x00'
+
+        ql.mem.write(path_buff, localpath)
+        regreturn = len(localpath) - 1
+
+    else:
+        regreturn = 0
+
     ql.hb.log_syscall(
         name = "readlink",
         args = {
-            "pathname": ql.os.utils.read_cstring(path_name),
+            "pathname": pathname,
         },
-        retval = retval
+        retval = regreturn
     )
+
+    ql.log.debug("readlink(%s, 0x%x, 0x%x) = %d" % (relative_path, path_buff, path_buffsize, regreturn))
+    return regreturn
+
 
 # -----------------------------------------------------------------
 def syscall_unlink(ql: Qiling, pathname: int):

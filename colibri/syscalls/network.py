@@ -193,13 +193,71 @@ def syscall_listen_onexit(ql: Qiling, sockfd: int, backlog: int, retval: int):
     )
 
 # -----------------------------------------------------------------
-def syscall_accept_onenter(ql: Qiling, accept_sockfd, accept_addr, accept_addrlen):
+def syscall_accept(ql: Qiling, accept_sockfd, accept_addr, accept_addrlen):
+    def inet_addr(ip):
+        ret = b''
+        tmp = ip.split('.')
+        if len(tmp) != 4:
+            return ret
+        for i in tmp[ : : -1]:
+            ret += bytes([int(i)])
+        return ret
+
+    s = ql.os.fd[accept_sockfd]
+    conn = None
+    address = (None, None)
+    if ql.hb.options.get("network", False):
+        try:
+            conn, address = s.accept()
+            if conn is None:
+                regreturn = -1
+
+
+        except:
+            if ql.verbose >= QL_VERBOSE.DEBUG:
+                raise
+            regreturn = -1
+    else:
+        # Doesn't really matter
+        conn = ql_socket.open(socket.AF_INET, socket.SOCK_STREAM)
+        address = (random_ipv4(), random.randint(0, 65535))
+
+    idx = next((i for i in range(NR_OPEN) if ql.os.fd[i] is None), -1)
+    regreturn = idx
+    if idx != -1:
+        ql.os.fd[idx] = conn
+
+    if ql.code == None and accept_addr != 0 and accept_addrlen != 0:
+        tmp_buf = ql.pack16(conn.family)
+        tmp_buf += ql.pack16(address[1])
+        tmp_buf += inet_addr(address[0])
+        tmp_buf += b'\x00' * 8
+        ql.mem.write(accept_addr, tmp_buf)
+        ql.mem.write_ptr(accept_addrlen, 16, 4)
+
+    extra = {}
+    if (
+        isinstance(s, ql_socket) and
+        hasattr(s, "binded_ip") and
+        hasattr(s, "binded_port")
+    ):
+        extra = {
+            "host": s.binded_ip,
+            "port": s.binded_port,
+            "family": s.family.name,
+            "type": s.socktype.name,
+        }
     ql.hb.log_syscall(
         name = "accept",
         args = {
             "fd": accept_sockfd,
+            "accept_addr": accept_addr,
+            "accept_addrlen": accept_addrlen,
         },
+        retval = regreturn,
+        extra = extra
     )
+    return regreturn
 
 # -----------------------------------------------------------------
 def syscall_recv(ql, sockfd: int, buf: int, length: int, flags: int):

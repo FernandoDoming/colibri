@@ -14,7 +14,6 @@ from multiprocessing import Manager, Value
 from qiling import Qiling
 from qiling.const import QL_INTERCEPT, QL_VERBOSE
 from qiling.os.posix.const import NR_OPEN
-from regex import B
 
 from colibri.syscalls.network import *
 from colibri.syscalls.filesystem import *
@@ -26,7 +25,7 @@ from colibri.utils.cmdline import (
     blue, red, yellow, green, magenta, cyan,
 )
 
-from colibri.core.classes import dotdict, Singleton
+from colibri.core.classes import dotdict
 from colibri.core.postprocess import PostProcess
 from colibri.core.const import *
 from colibri.utils.cwd import get_sample_results_path
@@ -37,7 +36,7 @@ log = logging.getLogger("colibri.main")
 log.setLevel(logging.INFO)
 
 # -----------------------------------------------------------------
-class Colibri(metaclass=Singleton):
+class Colibri():
     replaced_syscall = {
         # System
         "fork": syscall_fork,
@@ -53,11 +52,13 @@ class Colibri(metaclass=Singleton):
         "connect": syscall_connect,
         "send": syscall_send,
         "recv": syscall_recv,
+        "accept": syscall_accept,
         "setsockopt": syscall_setsockopt,
         "getsockopt": syscall_getsockopt,
         "getsockname": syscall_getsockname,
         # Filesystem
         "write": syscall_write,
+        "readlink": syscall_readlink,
         "unlink": syscall_unlink,
         "_newselect": syscall__newselect,
     }
@@ -67,12 +68,9 @@ class Colibri(metaclass=Singleton):
         "exit_group": syscall_exit_group_onenter,
         # execve does not return
         "execve": syscall_execve_onenter,
-        # Network
-        "accept": syscall_accept_onenter,
     }
     on_exit_hooks = {
         "open": syscall_open_onexit,
-        "readlink": syscall_readlink_onexit,
         "clone": syscall_clone_onexit,
         "close": syscall_close_onexit,
         "setsid": syscall_setsid_onexit,
@@ -132,16 +130,20 @@ class Colibri(metaclass=Singleton):
             log.exception("Failed to run Qiling on sample %s", fpath)
             self.stop()
 
-        while self.running.value:
-            time.sleep(1)
+        # ql.run() returns when the original process exits
+        # but malware may create detached childs that keep running
+        # wait them until timeout if there are childs
+        while self.running.value and self.pids:
+            time.sleep(.2)
 
     # ---------------------------------------
     def handle_signal(self, signum, frame):
-        self.stop()
+        if self.running.value:
+            log.info("Colibri execution hit timeout. Stopping...")
+            self.stop()
 
     def stop(self):
         self.running = Value(c_bool, False)
-        log.info("Colibri execution hit timeout. Stopping...")
         p = PostProcess(
             for_file = self.analyzed_sample["path"],
         )
@@ -187,7 +189,7 @@ class Colibri(metaclass=Singleton):
         shutil.copy(self.analyzed_sample["path"], target_dir)
 
     # ---------------------------------------
-    def log_syscall(self, name, args = {}, retval = "None", extra = {}):
+    def log_syscall(self, name, args = {}, retval = None, extra = {}):
         caller_pid = os.getpid()
         if not self.running.value:
             log.info(

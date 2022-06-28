@@ -28,7 +28,7 @@ class PostProcess:
         r_path = get_sample_results_path(self.static_info["sha256"])
         with open(os.path.join(r_path, "report.json"), "w") as f:
             f.write(
-                json.dumps(self.report)
+                json.dumps(self.report, indent=4)
             )
 
     def dump_ram(self):
