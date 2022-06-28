@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import time
 import random
@@ -87,11 +88,25 @@ class Colibri():
     def __init__(self, **kwargs) -> None:
         self.smm = Manager()
         self.running = Value(c_bool, False)
-
         self.options = dotdict(**kwargs)
 
     # ---------------------------------------
+    def hook_insn(self, ql: Qiling, address: int, size: int, md) -> None:
+        pid = os.getpid()
+        buf = ql.mem.read(address, size)
+
+        for insn in md.disasm(buf, address):
+            self.tracef.write(f"{pid} :: {insn.address:#x} : {insn.mnemonic:16s} {insn.op_str}\n")
+
     def set_hooks(self):
+        if self.options.trace:
+            r_path = get_sample_results_path(self.analyzed_sample["sha256"])
+            trace_path = os.path.join(r_path, "trace.log")
+            self.tracef = open(trace_path, "w")
+            self.ql.hook_code(self.hook_insn, user_data=self.ql.arch.disassembler)
+        else:
+            self.tracef = None
+
         for syscall_name, syscall_fn in self.replaced_syscall.items():
             self.ql.os.set_syscall(syscall_name, syscall_fn)
 
@@ -115,10 +130,10 @@ class Colibri():
             "path": os.path.abspath(fpath),
             "sha256": hashlib.sha256(open(fpath, "rb").read()).hexdigest(),
         }
-        self.set_hooks()
         self.reset_filesystem()
         self.create_results_dir()
         self.main_pid = os.getpid()
+        self.set_hooks()
 
         # Doing this instead of Qiling's timeout because
         # Qiling's timeout does not stop forked children
@@ -146,6 +161,10 @@ class Colibri():
 
     def stop(self):
         self.running = Value(c_bool, False)
+        if self.tracef and isinstance(self.tracef, io.IOBase):
+            self.tracef.close()
+            self.tracef = None
+
         p = PostProcess(
             for_file = self.analyzed_sample["path"],
         )
@@ -336,6 +355,11 @@ def main():
         action = "store_true"
     )
     parser.add_argument(
+        "--trace",
+        help = "Generate a trace log for every executed instruction (hinders performance)",
+        action = "store_true"
+    )
+    parser.add_argument(
         "-v",
         help = "Enable verbosity",
         action = "store_true"
@@ -360,6 +384,7 @@ def main():
         skip_sleep = not args.no_skip_sleep,
         rootfs = args.rootfs,
         dump = args.dump,
+        trace = args.trace,
     )
     if not args.q:
         print_banner()
